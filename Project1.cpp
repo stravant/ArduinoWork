@@ -1,5 +1,5 @@
 
-#include <iostream>
+//#include "stdint.h"
 
 ///////////////////////////////////////////////////////////////////////////////
 //
@@ -7,9 +7,22 @@
 //
 ///////////////////////////////////////////////////////////////////////////////
 
+// int16_t analogRead(int p);
+// class SerialH {
+// public:
+// 	int8_t read();
+// 	void write(int8_t v);
+// 	void print(const char* c);
+// 	void println(const char* c);
+// 	bool available();
+// 	void begin(int);
+// };
+// SerialH Serial1;
+// SerialH Serial;
+
 class MersenneTwister {
 public:
-	MersenneTwister() {
+	MersenneTwister(): index(0) {
 		seed(0xDEADB08F);
 	}
 	//
@@ -48,10 +61,8 @@ private:
 	}
 
 	uint32_t MT[624];
-	uint32_t index = 0;
+	uint32_t index;
 };
-
-MersenneTwister Random;
 
 
 
@@ -81,11 +92,16 @@ uint16_t analog_noise() {
 uint32_t pow_mod(uint32_t base, uint32_t exponent, uint32_t modulus) {
 	uint64_t result = 1;
 
+	//make the exponent reasonable
+	exponent &= 0x00000FFF;
+
 	//this will underflow when exponent=0, but using the post-increment it will 
 	//correctly halt before that becomes a problem.
 	while (exponent--) {
 		result = (result*base) % modulus;
 	}
+
+	return result;
 }
 
 
@@ -104,29 +120,37 @@ enum EncryptStatus {
 };
 class EncryptState {
 public:
-	static const uint32_t PrimeMod = 19211;
-	static const uint32_t Generator = 6;
+	EncryptState(): PrimeMod(19211), Generator(6),
+	                MyPublicKey(0), OtherPublicKey(0),
+	                SecretKey(0), MyKey(0),
+	                Status(NeedInit), 
+	                MyMessageIndex(0), OtherMessageIndex(0) {
+
+	}
+
+	uint32_t PrimeMod;
+	uint32_t Generator;
 	
 	//Diffie Helman key exchange info
-	static uint32_t MyPublicKey = 0;
-	static uint32_t OtherPublicKey = 0;
-	static uint32_t SecretKey = 0; //shared secret key
-	static uint32_t MyKey = 0; //my secret key
+	uint32_t MyPublicKey;
+	uint32_t OtherPublicKey;
+	uint32_t SecretKey; //shared secret key
+	uint32_t MyKey; //my secret key
 	
 	//Pseudo-random number generator 
-	static MersenneTwister MyRandomGen;
-	static MersenneTwister OtherRandomGen; 
+	MersenneTwister MyRandomGen;
+	MersenneTwister OtherRandomGen; 
 	
 	//what is my status? Shows whether we still need to initialize a key
 	//exchange or are ready to communicate.
-	static EncryptStatus Status = NeedInit;
+	EncryptStatus Status;
 	
 	//message indicies, for future use.
-	static uint8_t MyMessageIndex = 0;
-	static uint8_t OtherMessageIndex = 0;
+	uint8_t MyMessageIndex;
+	uint8_t OtherMessageIndex;
 
 	//sets us up for communications with the current private key that is set.
-	static void start_session() {
+	void start_session() {
 		//seed out both generators with the secret key
 		MyRandomGen.seed(SecretKey);
 		OtherRandomGen.seed(SecretKey);
@@ -139,6 +163,7 @@ public:
 		OtherMessageIndex = 0;
 	}
 };
+EncryptState Encrypt;
 
 
 
@@ -153,29 +178,29 @@ public:
 void send_key() {
 	Serial1.print("KEY");
 	// send prime modulus
-	Serial1.write((EncryptState::PrimeMod>>24) & 0xFF);
-	Serial1.write((EncryptState::PrimeMod>>16) & 0xFF);
-	Serial1.write((EncryptState::PrimeMod>>8 ) & 0xFF);
-	Serial1.write((EncryptState::PrimeMod    ) & 0xFF);
+	Serial1.write((Encrypt.PrimeMod>>24) & 0xFF);
+	Serial1.write((Encrypt.PrimeMod>>16) & 0xFF);
+	Serial1.write((Encrypt.PrimeMod>>8 ) & 0xFF);
+	Serial1.write((Encrypt.PrimeMod    ) & 0xFF);
 	// send generator
-	Serial1.write((EncryptState::Generator>>24) & 0xFF);
-	Serial1.write((EncryptState::Generator>>16) & 0xFF);
-	Serial1.write((EncryptState::Generator>>8 ) & 0xFF);
-	Serial1.write((EncryptState::Generator    ) & 0xFF);
+	Serial1.write((Encrypt.Generator>>24) & 0xFF);
+	Serial1.write((Encrypt.Generator>>16) & 0xFF);
+	Serial1.write((Encrypt.Generator>>8 ) & 0xFF);
+	Serial1.write((Encrypt.Generator    ) & 0xFF);
 	// send public key
-	Serial1.write((EncryptState::MyPublicKey>>24) & 0xFF);
-	Serial1.write((EncryptState::MyPublicKey>>16) & 0xFF);
-	Serial1.write((EncryptState::MyPublicKey>>8 ) & 0xFF);
-	Serial1.write((EncryptState::MyPublicKey    ) & 0xFF);
+	Serial1.write((Encrypt.MyPublicKey>>24) & 0xFF);
+	Serial1.write((Encrypt.MyPublicKey>>16) & 0xFF);
+	Serial1.write((Encrypt.MyPublicKey>>8 ) & 0xFF);
+	Serial1.write((Encrypt.MyPublicKey    ) & 0xFF);
 	Serial1.print(";");
 }
 
 void send_key_response() {
 	Serial1.print("RSP");
-	Serial1.write((EncryptState::MyPublicKey>>24) & 0xFF);
-	Serial1.write((EncryptState::MyPublicKey>>16) & 0xFF);
-	Serial1.write((EncryptState::MyPublicKey>>8 ) & 0xFF);
-	Serial1.write((EncryptState::MyPublicKey    ) & 0xFF);
+	Serial1.write((Encrypt.MyPublicKey>>24) & 0xFF);
+	Serial1.write((Encrypt.MyPublicKey>>16) & 0xFF);
+	Serial1.write((Encrypt.MyPublicKey>>8 ) & 0xFF);
+	Serial1.write((Encrypt.MyPublicKey    ) & 0xFF);
 	Serial1.print(";");
 }
 
@@ -202,38 +227,45 @@ void rec_key() {
 	// generate
 	int32_t val = analog_noise();
 	int32_t seed = val | (((uint32_t)val)<<16);
-	Random.seed(seed);
-	EncryptStatus::MyKey = Random.next_uint32();
+	Encrypt.MyRandomGen.seed(seed);
+	Encrypt.MyKey = Encrypt.MyRandomGen.next_uint32();
 
 	// calculate my public key, and the shared secret, since
 	// we do have the other's info to work with at this point.
-	EncryptState::MyPublicKey = 
-		pow_mod(EncryptState::Generator, EncryptState::MyKey, EncryptState::PrimeMod);
-	EncryptState::SecretKey = 
-		pow_mod(EncryptState::OtherPublicKey, EncryptState::MyKey, EncryptState::PrimeMod)
+	Encrypt.MyPublicKey = 
+		pow_mod(Encrypt.Generator, Encrypt.MyKey, Encrypt.PrimeMod);
+	Encrypt.SecretKey = 
+		pow_mod(Encrypt.OtherPublicKey, Encrypt.MyKey, Encrypt.PrimeMod);
 
 	// send. This will send my public key
-	send_key_response()
+	send_key_response();
 
 	// and we already have the secret key, so start the session
-	EncryptState::start_session();
+	Encrypt.start_session();
 }
 
 void rec_key_response() {
 	// find out the shared secret key
-	EncryptState::SecretKey =
-		pow_mod(EncryptState::OtherPublicKey, EncryptState::MyKey, EncryptState::PrimeMod);
+	Encrypt.SecretKey =
+		pow_mod(Encrypt.OtherPublicKey, Encrypt.MyKey, Encrypt.PrimeMod);
 
 	// and start the session
-	EncryptState::start_session();
+	Encrypt.start_session();
 }
 
 void rec_character(uint8_t ch) {
 	// decrypt the character using the partner's random generator
-	ch ^= (EncryptState::OtherRandomGen.next_uint32() & 0xFF);
+	uint8_t mask = Encrypt.OtherRandomGen.next_uint32() & 0xFF;
 
-	// and put it to our ouput
+	ch ^= (mask);
+
+	Serial.print("Rec<");
+	Serial.print(mask, HEX);
+	Serial.print(">: ");
+	Serial.print(ch);
+	Serial.print(" - ");
 	Serial.write(ch);
+	Serial.println();
 }
 
 
@@ -246,15 +278,15 @@ void rec_character(uint8_t ch) {
 // with messages too easily.
 //
 enum SerialState {
-	Ready,
+	SerialReady,
 	WaitKey_E,
 	WaitKey_Y,
 	WaitMsg_S,
 	WaitMsg_G,
 	WaitRsp_S,
 	WaitRsp_P
-}
-SerialState CurrentReadState = Ready;
+};
+SerialState CurrentReadState = SerialReady;
 uint8_t rec_byte_blocking() {
 	// simple function to wait for and return a byte from the serial1
 	while (!Serial1.available());
@@ -270,58 +302,57 @@ uint32_t rec_int32_blocking() {
 void process_incomming_messages() {
 	while (Serial1.available()) {
 		uint8_t val = Serial1.read() & 0xFF;
-		if (val == 'K' && CurrentReadState == Ready) {
-			CurrentReadState = WaitKey_E
+		if (val == 'K' && CurrentReadState == SerialReady) {
+			CurrentReadState = WaitKey_E;
 		} else if (val == 'E' && CurrentReadState == WaitKey_E) {
-			CurrentReadState = WaitKey_Y
+			CurrentReadState = WaitKey_Y;
 		} else if (val == 'Y' && CurrentReadState == WaitKey_Y) {
-			CurrentReadState = Ready;
+			CurrentReadState = SerialReady;
 
 			// Do the main KEY message decoding.
 			// we do do this all in one single chunk, since it's probably
 			// a valid message if we've gotten this far, or at least all
 			// of the bytes of the message are here or on their way even
 			// if they got corrupted.
-			EncryptState::PrimeMod = rec_int32_blocking();
-			EncryptState::Generator = rec_int32_blocking();
-			EncryptState::OtherPublicKey = rec_int32_blocking();
-			EncryptState::MessageIndex = 0;
-			EncryptState::Status = SentKey;
+			Encrypt.PrimeMod = rec_int32_blocking();
+			Encrypt.Generator = rec_int32_blocking();
+			Encrypt.OtherPublicKey = rec_int32_blocking();
+			Encrypt.Status = SentKey;
 			//
 			if (rec_byte_blocking() != ';') {
 				//failed message integrity check
-				EncryptState::Status = Failed;
+				Encrypt.Status = Failed;
 			} else {
 				rec_key();
 			}
 			
 
 
-		} else if (val == 'R' && CurrentReadState == Ready) {
+		} else if (val == 'R' && CurrentReadState == SerialReady) {
 			CurrentReadState = WaitRsp_S;
 		} else if (val == 'S' && CurrentReadState == WaitRsp_S) {
 			CurrentReadState = WaitRsp_P;
 		} else if (val == 'P' && CurrentReadState == WaitRsp_P) {
-			CurrentReadState = Ready;
+			CurrentReadState = SerialReady;
 
 			// Do the main RSP message decoding.
 			// Get the other's public key
-			EncryptState::OtherPublicKey = rec_int32_blocking();
+			Encrypt.OtherPublicKey = rec_int32_blocking();
 			//
 			if (rec_byte_blocking() != ';') {
 				//failed message integrity check
-				EncryptState::Status = Failed;
+				Encrypt.Status = Failed;
 			} else {
 				rec_key_response();
 			}
 
 
-		} else if (val == 'M' && CurrentReadState == Ready) {
+		} else if (val == 'M' && CurrentReadState == SerialReady) {
 			CurrentReadState = WaitMsg_S;
 		} else if (val == 'S' && CurrentReadState == WaitMsg_S) {
 			CurrentReadState = WaitMsg_G;
 		} else if (val == 'G' && CurrentReadState == WaitMsg_G) {
-			CurrentReadState = Ready;
+			CurrentReadState = SerialReady;
 
 			// Do the main MSG message decoding.
 			// get the data character
@@ -329,13 +360,13 @@ void process_incomming_messages() {
 			//
 			if (rec_byte_blocking() != ';') {
 				// failed message integrity check
-				EncryptState::Status = Failed;
+				Encrypt.Status = Failed;
 			} else {
 				rec_character(ch);
 			}
 
 		} else {
-			CurrentReadState = Ready;
+			CurrentReadState = SerialReady;
 		}
 	}
 }
@@ -351,6 +382,7 @@ void process_incomming_messages() {
 
 // Initiate a new secure session for this any any connected client.
 void set_session_key() {
+	Serial.println("=========================\n|| Start Session");
 	// get a seed as analog noise
 	uint16_t noise = analog_noise();
 
@@ -359,13 +391,19 @@ void set_session_key() {
 	uint32_t seed = noise | (((uint32_t)noise) << 16);
 
 	// generate the key / public key for me
-	Random.seed(seed);
-	EncryptState::MyKey = Random.next_uint32();
-	EncryptState::MyPublicKey =
-		pow_mod(EncryptState::Generator, EncryptState::MyKey, EncryptState::PrimeMod);
+	Encrypt.MyRandomGen.seed(seed);
+	Encrypt.MyKey = Encrypt.MyRandomGen.next_uint32();
+	Encrypt.MyPublicKey =
+		pow_mod(Encrypt.Generator, Encrypt.MyKey, Encrypt.PrimeMod);
+
+	Serial.print("|| Sent Public key: ");
+	Serial.println(Encrypt.MyPublicKey, HEX);
+	Serial.print("|| My private key: ");
+	Serial.println(Encrypt.MyKey, HEX);
+	Serial.println("=========================");
 
 	// set us to waiting for key response
-	EncryptState::Status = 
+	Encrypt.Status = SentKey;
 
 	// and send them off
 	send_key();
@@ -374,10 +412,10 @@ void set_session_key() {
 // Encrypt and send a character
 void output_character(uint8_t ch) {
 	// encrypt the character with my random generator
-	ch ^= (EncryptState::MyRandomGen)
+	ch ^= (Encrypt.MyRandomGen.next_uint32() & 0xFF);
 
 	// send the character
-	send_character(c);
+	send_character(ch);
 }
 
 
@@ -394,31 +432,36 @@ void setup() {
 	Serial1.begin(9600);
 }
 
+int a;
 void loop() {
 	// let the incomming message processing do its work.
-	process_incomming_messages()
+	process_incomming_messages();
 
 	// check for user input
 	if (Serial.available()) {
 		// we got user input, see if we're initialized
-		if (EncryptState::Status == NeedInit) {
+		if (Encrypt.Status == NeedInit) {
 			// we still need to do init, fire off the init
 			set_session_key();
 
-		} else if (EncryptState::Status == Ready) {
+		} else if (Encrypt.Status == Ready) {
 			// we're ready, send the input
 			output_character(Serial.read());
 
-		} else if (EncryptState::Status == Failed) {
+		} else if (Encrypt.Status == Failed) {
 			// we failed, let the user know
-			Serial.println("Failed to send.")
+			Serial.println("Failed to send.");
 
 			// and clear out the buffer so we don't spam failure messages
 			while (Serial.available()) 
 				Serial.read();
-		} else if (EncryptState::Status == SentKey) {
+		} else if (Encrypt.Status == SentKey) {
 			// nothing to do, we're waiting for the other's public key to get-
 			// to us, keep the input in the buffer for now.
+		} else {
+			Serial.println("Assertation failure.");
+			while (Serial.available()) 
+				Serial.read();
 		}
 	}
 }
