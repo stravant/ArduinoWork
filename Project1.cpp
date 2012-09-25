@@ -90,17 +90,25 @@ uint16_t analog_noise() {
 ///////////////////////////////////////////////////////////////////////////////
 
 uint32_t pow_mod(uint32_t base, uint32_t exponent, uint32_t modulus) {
-	uint64_t result = 1;
-
-	//make the exponent reasonable
-	exponent &= 0x00000FFF;
-
-	//this will underflow when exponent=0, but using the post-increment it will 
-	//correctly halt before that becomes a problem.
-	while (exponent--) {
-		result = (result*base) % modulus;
+	//
+	// Idea: 
+	// Outer loop: b^e %c => Product[i: 0->32]( b^(Bit[e,i] * 2^i) %c ) %c
+	// For the bits which have Bit[e,i] = 1 :
+	//   Inner loop: b^(2^i) => b^2 iteratively for i times 
+	// 
+	int64_t result = 1;
+	for (int place = 0; place < 32; ++place) {
+		// if we have a 1 bit, we need to calculate b^(2^place) and multiply
+		// it to the product
+		if ((exponent>>place) & 0x1) {
+			int64_t factor = base;
+			// square base iteratively to get the factor
+			for (int i = 0; i < place; ++i)
+				factor = (factor*factor) % modulus;
+			// multiply the place to the result
+			result = (result*factor) % modulus;
+		}
 	}
-
 	return result;
 }
 
@@ -120,7 +128,7 @@ enum EncryptStatus {
 };
 class EncryptState {
 public:
-	EncryptState(): PrimeMod(19211), Generator(6),
+	EncryptState(): PrimeMod(0x7FFFFFFF), Generator(16807),
 	                MyPublicKey(0), OtherPublicKey(0),
 	                SecretKey(0), MyKey(0),
 	                Status(NeedInit), 
@@ -223,6 +231,11 @@ void send_character(char c) {
 ///////////////////////////////////////////////////////////////////////////////
 
 void rec_key() {
+	Serial.println("===========================");
+	Serial.println("Got key: ");
+	Serial.print("Other's Key: ");
+	Serial.println(Encrypt.OtherPublicKey, HEX);
+	Serial.println("===========================");
 	// generate and send our own response secret key
 	// generate
 	int32_t val = analog_noise();
