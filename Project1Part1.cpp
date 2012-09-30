@@ -43,7 +43,7 @@ uint32_t pow_mod(uint16_t base, uint32_t exponent, uint32_t modulus) {
 		// if we have a 1 bit, we need to calculate b^(2^place) and multiply
 		// it to the product
 		if (shift & 0x1) {
-			int64_t factor = base;
+			uint64_t factor = base;
 			// square base iteratively to get the factor
 			for (uint8_t i = 0; i < place; ++i)
 				factor = (factor*factor) % modulus;
@@ -60,7 +60,7 @@ uint32_t pow_mod(uint16_t base, uint32_t exponent, uint32_t modulus) {
 //
 ///////////////////////////////////////////////////////////////////////////////
 
-/* Read a long off of the serial port and return. */
+/* Read a long off of the serial port and return. Does not distinguish between failing to parse an int and reading 0 */
 int32_t readlong(uint8_t len) {
   char s[len+1];
   readline(s, len);
@@ -73,7 +73,7 @@ void readline(char *s, int maxlen) {
   uint8_t i = 0;
 
   while(1) {
-    while (Serial.available() == 0); /* Do nothing */
+    while (Serial.available() == 0);
 
     s[i] = Serial.read();
     if (s[i] == '\0' || s[i] == '\n' || i == maxlen) break;
@@ -88,25 +88,29 @@ void readline(char *s, int maxlen) {
 ///////////////////////////////////////////////////////////////////////////////
 enum EncryptStatus {
 	NeedInit,
-	SentKey,
 	Ready,
 	Failed,
 };
 class EncryptState {
 public:
-	EncryptState(): PrimeMod(0x7FFFFFFF), Generator(16807),
+	EncryptState(): PrimeMod(19211), Generator(6),
 					InitialSeed(0xDEADB08F), MyPublicKey(0), 
 					OtherPublicKey(0), SecretKey(0), MyKey(0),
 	                Status(NeedInit), MaxKeySize(3) {}
 
+	// The prime to use as a modulus
 	uint32_t PrimeMod;
+
+	// The Diffie-Hellman generator for the prime
 	uint32_t Generator;
+
+	// An initial seed to use on for random number generation
 	uint32_t InitialSeed;
 
 	// The max length (in chars) for keys. Change if the key variable types change
 	uint8_t MaxKeySize;
 	
-	// Diffie Helman key exchange info
+	// Diffie Hellman key exchange info
 	// Note: The below keys may be changed as low as 8 bits unsigned or as high as 
 	// 		 32 bits unsigned and everything will work fine. Although you may need to change the MaxKeySize
 	uint8_t MyPublicKey;
@@ -117,6 +121,11 @@ public:
 	//what is my status? Shows whether we still need to initialize a key
 	//exchange or are ready to communicate.
 	EncryptStatus Status;
+
+	// Encrypts or decrypts the character
+	uint8_t encrypt_decrypt(uint8_t ch) {
+		return ch ^ SecretKey;
+	}
 
 	// Generates a random private key and then sets us up for communication
 	void start_session() {
@@ -136,7 +145,7 @@ public:
 		Serial.println("===========================");
 
 		// Ask the user for the other's public key
-		Serial.println("Please enter the other public key to continue...");
+		Serial.println("Please enter the other public key (number > 0) to continue...");
 
 		// Wait for the key
 		while ( !Serial.available() ) {};
@@ -176,15 +185,6 @@ public:
 };
 EncryptState Encrypt;
 
-// Encrypt and send a character
-void output_character(uint8_t ch) {
-	// encrypt the character with secret key
-	ch ^= Encrypt.SecretKey;
-
-	// send the character
-	Serial1.write(ch);
-}
-
 ///////////////////////////////////////////////////////////////////////////////
 //
 // The main setup and loop
@@ -205,8 +205,9 @@ void loop() {
 	if (Serial.available()) {
 		// we got user input, see if we're initialized
 		if (Encrypt.Status == Ready) {
-			// we're ready, send the input
-			output_character(Serial.read());
+			// Read the char from the Serial Monitors' input, encrypt it and send it
+			// to the other device via Serial1
+			Serial1.write(Encrypt.encrypt_decrypt(Serial.read()));
        
 		} else if (Encrypt.Status == Failed) {
 			// we failed, let the user know
@@ -217,6 +218,7 @@ void loop() {
 
 			// Restart the encryption session
 			Encrypt.start_session();
+
 		} else {
 			Serial.println("Assertation failure.");
 			while (Serial.available()) Serial.read();
@@ -226,8 +228,8 @@ void loop() {
 	// Check for data on the other serial port
 	if (Serial1.available()) {
 		if (Encrypt.Status == Ready) {
-			// Encryptions good, receive the character
-			Serial.write(Serial1.read() ^ Encrypt.SecretKey);
+			// Read the char, encrypt it and output it onto the Serial Monitor
+			Serial.write(Encrypt.encrypt_decrypt(Serial1.read()));
        
 		} else if (Encrypt.Status == Failed) {
 			// we failed, let the user know
@@ -242,6 +244,7 @@ void loop() {
 
 			// Restart the encryption session
 			Encrypt.start_session();
+
 		} else {
 			Serial1.println("Assertation failure.");
 			while (Serial1.available()) Serial1.read();
