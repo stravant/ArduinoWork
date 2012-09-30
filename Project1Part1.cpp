@@ -30,7 +30,7 @@ uint16_t analog_noise() {
 //
 ///////////////////////////////////////////////////////////////////////////////
 
-uint32_t pow_mod(uint16_t base, uint32_t exponent, uint64_t modulus) {
+uint32_t pow_mod(uint16_t base, uint32_t exponent, uint32_t modulus) {
 	//
 	// Idea: 
 	// Outer loop: b^e %c => Product[i: 0->32]( b^(Bit[e,i] * 2^i) %c ) %c
@@ -97,7 +97,7 @@ public:
 	EncryptState(): PrimeMod(0x7FFFFFFF), Generator(16807),
 					InitialSeed(0xDEADB08F), MyPublicKey(0), 
 					OtherPublicKey(0), SecretKey(0), MyKey(0),
-	                Status(NeedInit), MaxKeySize(5) {}
+	                Status(NeedInit), MaxKeySize(3) {}
 
 	uint32_t PrimeMod;
 	uint32_t Generator;
@@ -109,10 +109,10 @@ public:
 	// Diffie Helman key exchange info
 	// Note: The below keys may be changed as low as 8 bits unsigned or as high as 
 	// 		 32 bits unsigned and everything will work fine. Although you may need to change the MaxKeySize
-	uint16_t MyPublicKey;
-	uint16_t OtherPublicKey;
-	uint16_t SecretKey; //shared secret key
-	uint16_t MyKey; //my secret key
+	uint8_t MyPublicKey;
+	uint8_t OtherPublicKey;
+	uint8_t SecretKey; //shared secret key
+	uint8_t MyKey; //my secret key
 
 	//what is my status? Shows whether we still need to initialize a key
 	//exchange or are ready to communicate.
