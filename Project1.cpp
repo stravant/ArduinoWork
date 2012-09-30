@@ -1,12 +1,6 @@
 
 //#include "stdint.h"
 
-///////////////////////////////////////////////////////////////////////////////
-//
-// Mersenne Twister random number generator implementation
-//
-///////////////////////////////////////////////////////////////////////////////
-
 // int16_t analogRead(int p);
 // class SerialH {
 // public:
@@ -19,6 +13,12 @@
 // };
 // SerialH Serial1;
 // SerialH Serial;
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// Mersenne Twister random number generator implementation
+//
+///////////////////////////////////////////////////////////////////////////////
 
 class MersenneTwister {
 public:
@@ -89,21 +89,22 @@ uint16_t analog_noise() {
 //
 ///////////////////////////////////////////////////////////////////////////////
 
-uint32_t pow_mod(uint32_t base, uint32_t exponent, uint32_t modulus) {
+uint32_t pow_mod(uint16_t base, uint32_t exponent, uint64_t modulus) {
 	//
 	// Idea: 
 	// Outer loop: b^e %c => Product[i: 0->32]( b^(Bit[e,i] * 2^i) %c ) %c
 	// For the bits which have Bit[e,i] = 1 :
 	//   Inner loop: b^(2^i) => b^2 iteratively for i times 
 	// 
-	int64_t result = 1;
-	for (int place = 0; place < 32; ++place) {
+	uint32_t shift;
+	uint32_t result = 1;
+	for (uint8_t place = 0; shift = exponent>>place; ++place) {
 		// if we have a 1 bit, we need to calculate b^(2^place) and multiply
 		// it to the product
-		if ((exponent>>place) & 0x1) {
+		if (shift & 0x1) {
 			int64_t factor = base;
 			// square base iteratively to get the factor
-			for (int i = 0; i < place; ++i)
+			for (uint8_t i = 0; i < place; ++i)
 				factor = (factor*factor) % modulus;
 			// multiply the place to the result
 			result = (result*factor) % modulus;
@@ -232,8 +233,7 @@ void send_character(char c) {
 
 void rec_key() {
 	Serial.println("===========================");
-	Serial.println("Got key: ");
-	Serial.print("Other's Key: ");
+	Serial.print("|| Other's Key: ");
 	Serial.println(Encrypt.OtherPublicKey, HEX);
 	Serial.println("===========================");
 	// generate and send our own response secret key
@@ -338,8 +338,6 @@ void process_incomming_messages() {
 			} else {
 				rec_key();
 			}
-			
-
 
 		} else if (val == 'R' && CurrentReadState == SerialReady) {
 			CurrentReadState = WaitRsp_S;
@@ -445,7 +443,6 @@ void setup() {
 	Serial1.begin(9600);
 }
 
-int a;
 void loop() {
 	// let the incomming message processing do its work.
 	process_incomming_messages();
