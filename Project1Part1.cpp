@@ -30,7 +30,7 @@ uint16_t analog_noise() {
 //
 ///////////////////////////////////////////////////////////////////////////////
 
-uint32_t pow_mod(uint16_t base, uint32_t exponent, uint32_t modulus) {
+uint32_t pow_mod(uint16_t base, uint32_t exponent, uint64_t modulus) {
 	//
 	// Idea: 
 	// Outer loop: b^e %c => Product[i: 0->32]( b^(Bit[e,i] * 2^i) %c ) %c
@@ -131,7 +131,7 @@ public:
 
 		// Show the user our shared index
 		Serial.println("===========================");
-		Serial.println("My Key: ");
+		Serial.print("|| My Key: ");
 		Serial.println(MyPublicKey);
 		Serial.println("===========================");
 
@@ -151,10 +151,10 @@ public:
 
 			// Tell the user that we're a go
 			Serial.println("===========================");
-			Serial.println("Encryption configuration successful");
-			Serial.print("My key: ");
+			Serial.println("|| Encryption configuration successful");
+			Serial.print("|| My key: ");
 			Serial.println(MyPublicKey);
-			Serial.print("Other's Key: ");
+			Serial.print("|| Other's Key: ");
 			Serial.println(OtherPublicKey);
 			Serial.println("===========================");
 		} else {
