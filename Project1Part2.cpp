@@ -192,7 +192,7 @@ KeyAndHandler MessageHandlers[] = {
 
 class RingBuffer {
 	public: 
-		RingBuffer(): BufferLen(131), BufferPosition(0) {
+		RingBuffer(): BufferLen(35), BufferPosition(0) {
 			Buffer = (uint8_t*) malloc(BufferLen * sizeof(uint8_t));
 			if ( Buffer == 0 ) Serial.println("Memory exception allocating ring buffer!");
 		};
@@ -381,6 +381,12 @@ class Communication {
 			Serial1.print('\0');
 		}
 
+		void send_message(char *buffer) {
+			Serial1.print("MSG");
+			// @TODO: INSERT WORKING CODE HERE!
+			Serial1.print('\0');
+		}
+
 		///////////////////////////////////////////////////////////////////////////////
 		//
 		// Data deserialization code
@@ -436,9 +442,6 @@ class Communication {
 					CurrentKey[0] = *(DataBuffer.peek( -2 ));
 					CurrentKey[1] = *(DataBuffer.peek( -1 ));
 					CurrentKey[2] = *(DataBuffer.peek(  0 ));
-
-					Serial.println("===");
-					Serial.println(CurrentKey);
 
 					// If these characters form a valid key, we can move on to processing the message.
 					// sizeof messagehandlers may not work
@@ -576,7 +579,7 @@ void output_character(uint8_t ch) {
 // The main setup and loop
 //
 ///////////////////////////////////////////////////////////////////////////////
-RingBuffer InBuffer;
+
 void setup() {
 	// open the serial communications that I need
 	Serial.begin(9600);
