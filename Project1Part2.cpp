@@ -444,7 +444,7 @@ class Communication {
 					CurrentKey[1] = *(DataBuffer.peek( -1 ));
 					CurrentKey[2] = *(DataBuffer.peek(  0 ));
 
-					Serial.println("=====");
+					Serial.println("===");
 					Serial.println(CurrentKey);
 
 					// If these characters form a valid key, we can move on to processing the message.
@@ -612,7 +612,7 @@ void loop() {
 
 		} else if (Encrypt.Status == Ready) {
 			// we're ready, send the input
-			output_character(*InBuffer.peek());
+			output_character(Serial.read());
 
 		} else if (Encrypt.Status == Failed) {
 			// we failed, let the user know
