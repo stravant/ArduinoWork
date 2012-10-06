@@ -14,9 +14,6 @@
 // SerialH Serial1;
 // SerialH Serial;
 
-// Debug var
-bool Debugging = true;
-
 ///////////////////////////////////////////////////////////////////////////////
 //
 // Mersenne Twister random number generator implemented from Wikipedia
@@ -331,7 +328,7 @@ enum SerialState {
 // Encryption handshakes need a timeout
 class Communication {
 	public:
-		Communication(): CurrentReadState(SerialReady), ReceivedDataLen(0) {};
+		Communication(): CurrentReadState(SerialReady), ReceivedDataLen(0) { CurrentKey[3] = '\0'; };
 
 		// Manage the current state of serial send/receive
 		SerialState CurrentReadState;
@@ -352,7 +349,6 @@ class Communication {
 		///////////////////////////////////////////////////////////////////////////////
 
 		void send_key() {
-			Debugging && Serial.println("Sending key");
 			// set us to waiting for key response
 			Encrypt.Status = SentKey;
 
@@ -371,7 +367,6 @@ class Communication {
 		}
 
 		void send_key_response() {
-			Debugging && Serial.println("Sending key response");
 			Serial1.print("RSP");
 
 			// Output my public key
@@ -381,7 +376,6 @@ class Communication {
 		}
 
 		void send_character(char c) {
-			Debugging && Serial.println("Sending Char");
 			Serial1.print("MSG");
 			Serial1.write(c);
 			Serial1.print('\0');
@@ -422,7 +416,6 @@ class Communication {
 		}
 
 		void rec_key_response() {
-			Debugging && Serial.println("Receiving Key Response");
 			// find out the shared secret key
 			Encrypt.SecretKey = pow_mod(Encrypt.OtherPublicKey, Encrypt.MyKey, Encrypt.PrimeMod);
 
@@ -449,9 +442,7 @@ class Communication {
 
 					// If these characters form a valid key, we can move on to processing the message.
 					// sizeof messagehandlers may not work
-					for ( uint8_t i = 0; i < 3; i++ ) {
-						// Debugging && Serial.println(MessageHandlers[i].Key);
-						// Debugging && Serial.println(strcmp(MessageHandlers[i].Key, CurrentKey));
+					for ( uint8_t i = 0; i < (sizeof(MessageHandlers)/sizeof(KeyAndHandler)); i++ ) {
 						if ( !strcmp(MessageHandlers[i].Key, CurrentKey) ) {
 							Serial.print("Key Matched:");
 							Serial.println(CurrentKey);
@@ -503,7 +494,7 @@ class Communication {
 			}
 		}
 	private: 
-		char CurrentKey[3];
+		char CurrentKey[4];
 		uint8_t ReceivedDataLen;
 		KeyAndHandler CurrentMessageHandler;
 
@@ -527,8 +518,6 @@ Communication Comms;
 
 // Sets up the EncryptStatus class with all the numbers we need
 void KeyHandler( uint8_t data[12] ) {
-	Debugging && Serial.println("KeyHandler Called");
-
 	// Give Encrypt the base data that it needs
 	Encrypt.PrimeMod = to_uint32(data[0], data[1], data[2], data[3]);
 	Encrypt.Generator = to_uint32(data[4], data[5], data[6], data[7]);
@@ -541,8 +530,6 @@ void KeyHandler( uint8_t data[12] ) {
 
 // Decrypts all characters and prints them in the users' serial monitor
 void MsgHandler( uint8_t data[32] ) {
-	Debugging && Serial.println("MsgHandler Called");
-
 	for ( uint8_t i = 0; i < 32; i++ ) {
 		// Null character symbolizes end of useful data
 		if ( data[i] == '\0' )
@@ -555,8 +542,6 @@ void MsgHandler( uint8_t data[32] ) {
 // RSP message is receieved after we send a KEY message. It will contain the other
 // devices' public key
 void RspHandler( uint8_t data[4] ) {
-	Debugging && Serial.println("RspHandler Called");
-
 	Encrypt.OtherPublicKey = to_uint32(data[0], data[1], data[2], data[3]);
 
 	// find out the shared secret key
