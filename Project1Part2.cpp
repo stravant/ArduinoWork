@@ -120,12 +120,12 @@ uint32_t add_mod(uint32_t a, uint32_t b, uint32_t mod) {
 int tp = 0;
 uint32_t mulpow2_mod(uint32_t a, uint8_t pow2, uint32_t mod) {
 	for (uint8_t i = 0; i < pow2; ++i) {
-		int t = micros();
+		// int t = micros();
 		a = add_mod(a, a, mod);
-		int t2 = micros();
-		if ((t2 - t) > tp) {
-			tp = t2-t;
-		}
+		// int t2 = micros();
+		// if ((t2 - t) > tp) {
+		// 	tp = t2-t;
+		// }
 	}
 	return a;
 }
@@ -136,17 +136,16 @@ uint32_t mulpow2_mod(uint32_t a, uint8_t pow2, uint32_t mod) {
 //
 uint32_t mul_mod(uint32_t a, uint32_t b, uint32_t mod) {
 	uint32_t sum = 0;
-	for (uint8_t j = 0; j < 32; ++j) {
-		if (((b >> j) & 1)) {
-			//b has a 1 it the j'th place
-			int t = micros();
-			sum = add_mod(sum, mulpow2_mod(a, j, mod), mod);
-			int t2 = micros();
-			if ((t2 - t) > tp) {
-				tp = t2-t;
-			}
+	uint32_t v = b;
+
+	for (uint8_t j = 0; j < 31; ++j) {
+		if ((b >> j) & 1) {
+			sum = (sum + v) % mod;
 		}
+
+		v << 2;
 	}
+
 	return sum;
 }
 
@@ -163,20 +162,19 @@ uint32_t pow_mod(uint32_t base, uint32_t exponent, uint32_t modulus) {
 	// 
 	uint32_t shift;
 	uint32_t result = 1;
+	uint32_t factor = base;
+
 	for (uint8_t place = 0; shift = exponent>>place; ++place) {
 		// if we have a 1 bit, we need to calculate b^(2^place) and multiply
 		// it to the product
 		if (shift & 0x1) {
-			int32_t factor = base;
-			// square base iteratively to get the factor
-			for (uint8_t i = 0; i < place; ++i) {
-				factor = mul_mod(factor, factor, modulus);
-			}
 			// multiply the place to the result
 			result = mul_mod(result, factor, modulus);
 		}
+
+		factor = mul_mod(factor, factor, modulus);
 	}
-		Serial.println(tp);
+	
 	return result;
 }
 
@@ -218,10 +216,10 @@ int mod(int a, int b) {
 ///////////////////////////////////////////////////////////////////////////////
 
 uint32_t to_uint32( uint8_t b[4] ) {
-	return ( (((uint32_t) b[1]) << 24) | 
-			 (((uint32_t) b[2]) << 16) |
-			 (((uint32_t) b[3]) <<  8) |
-			 (((uint32_t) b[4])      ) );
+	return ( (((uint32_t) b[0]) << 24) | 
+			 (((uint32_t) b[1]) << 16) |
+			 (((uint32_t) b[2]) <<  8) |
+			 (((uint32_t) b[3])      ) );
 }
 
 
@@ -263,7 +261,7 @@ KeyAndHandler MessageHandlers[] = {
 
 class RingBuffer {
 	public: 
-		RingBuffer(): BufferLen(35), BufferPosition(0) {
+		RingBuffer(): BufferLen(36), BufferPosition(-1) {
 			Buffer = (uint8_t*) malloc(BufferLen * sizeof(uint8_t));
 			if ( Buffer == 0 ) Serial.println("Memory exception allocating ring buffer!");
 		};
@@ -286,6 +284,8 @@ class RingBuffer {
 			BufferPosition = mod(BufferPosition+1, BufferLen);
 			Buffer[BufferPosition] = val;
 		}
+
+		uint8_t* buffer() { return Buffer; }
 
 	private: 
 		int16_t BufferPosition;
@@ -374,7 +374,7 @@ public:
 		// Mersenne works best when the bits in the seed are close to random to
 		// start with, so fill all 32 bits with something, rather than just 16
 		uint32_t seed = noise | (((uint32_t) noise) << 16);
-
+		uint32_t t = micros();
 		// generate the key / public key for me
 		MyRandomGen.seed(seed);
 		MyKey = MyRandomGen.next_uint32();
@@ -411,11 +411,7 @@ public:
 	// Manage the current state of serial send/receive
 	SerialState CurrentReadState;
 
-	// Key buffer contains the key that indicates the type of message that is being received
-	//char KeyBuffer[3];
-
 	// The maximum transmission size is 32 8 bit ints
-	//uint8_t DataBuffer[35];
 	RingBuffer DataBuffer;
 
 	///////////////////////////////////////////////////////////////////////////////
@@ -455,8 +451,10 @@ public:
 
 	void send_block(char block[32]) {
 		Serial1.print("MSG");
+
 		for (int8_t i = 0; i < 32; ++i)
 			Serial1.write(block[i]);
+
 		Serial1.print('\0');
 	}
 
@@ -692,7 +690,6 @@ void output_message(char* msg, uint16_t len) {
 
 
 
-
 ///////////////////////////////////////////////////////////////////////////////
 //
 // StringBuilder for buffering whole lines of user input to send.
@@ -749,7 +746,6 @@ private:
 
 
 
-
 ///////////////////////////////////////////////////////////////////////////////
 //
 // The main setup and loop
@@ -758,6 +754,7 @@ private:
 
 StringBuilder UserInputBuffer;
 
+uint8_t charsrec = 0;
 void setup() {
 	// open the serial communications that I need
 	Serial.begin(9600);
@@ -779,20 +776,22 @@ void loop() {
 		} else if (Encrypt.Status == Ready) {
 			// we're ready, read the input
 			char ch = Serial.read();
+
 			//buffer the character
 			UserInputBuffer.append(ch);
 
 			//if it's a newline, send off the whole line
 			//and clear out the UserInputBuffer
-			if (ch == '\n') {
+			if (ch == '\n' || UserInputBuffer.length() > 32) {
 				//send
 				//add a null terminator, since the messages need it
 				UserInputBuffer.append('\0');
+				
 				output_message(UserInputBuffer.buffer(), UserInputBuffer.length());
+				
 				//clear
 				UserInputBuffer.clear();
 			}
-
 		} else if (Encrypt.Status == Failed) {
 			// we failed, let the user know
 			Serial.println("Failed to send.");
