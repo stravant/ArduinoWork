@@ -89,7 +89,72 @@ uint16_t analog_noise() {
 //
 ///////////////////////////////////////////////////////////////////////////////
 
-uint32_t pow_mod(uint16_t base, uint32_t exponent, uint64_t modulus) {
+////////////////////////////////////////////////////////////////////////////////////
+//
+// Code for calculating the keys safely for any values up to and including INT_MAX
+// as the generator, prime modulus and private key.
+//
+////////////////////////////////////////////////////////////////////////////////////
+
+//
+// add_mod:
+// Safe add (non-overflowing) for 32bit numbers in a modular space
+//
+uint32_t add_mod(uint32_t a, uint32_t b, uint32_t mod) {
+	// a = a%mod; 
+	// b = b%mod;
+	// if (a > 0xFFFFFFFFull-b) {
+	// 	int32_t dividend = 0xFFFFFFFF / mod;
+	// 	return dividend + add_mod(0xFFFFFFFF - dividend*mod, (a+b+1) % mod, mod);
+	// } else {
+	// 	return (a+b) % mod;
+	// }
+	int64_t aa = a, bb = b;
+	return (a+b) % mod;
+}
+
+//
+// mulpow2_mod:
+// Safe multiply (non-overflowing) by a power of two in a modular space
+//
+int tp = 0;
+uint32_t mulpow2_mod(uint32_t a, uint8_t pow2, uint32_t mod) {
+	for (uint8_t i = 0; i < pow2; ++i) {
+		int t = micros();
+		a = add_mod(a, a, mod);
+		int t2 = micros();
+		if ((t2 - t) > tp) {
+			tp = t2-t;
+		}
+	}
+	return a;
+}
+
+//
+// mul_mod
+// Safe multiply (non-overflowing) for 32bit numbers in a modular space
+//
+uint32_t mul_mod(uint32_t a, uint32_t b, uint32_t mod) {
+	uint32_t sum = 0;
+	for (uint8_t j = 0; j < 32; ++j) {
+		if (((b >> j) & 1)) {
+			//b has a 1 it the j'th place
+			int t = micros();
+			sum = add_mod(sum, mulpow2_mod(a, j, mod), mod);
+			int t2 = micros();
+			if ((t2 - t) > tp) {
+				tp = t2-t;
+			}
+		}
+	}
+	return sum;
+}
+
+//
+// pow_mod
+// Safe power (non-overflowing) for 32bit numbers in a modular space
+//
+uint32_t pow_mod(uint32_t base, uint32_t exponent, uint32_t modulus) {
 	//
 	// Idea: 
 	// Outer loop: b^e %c => Product[i: 0->32]( b^(Bit[e,i] * 2^i) %c ) %c
@@ -102,14 +167,16 @@ uint32_t pow_mod(uint16_t base, uint32_t exponent, uint64_t modulus) {
 		// if we have a 1 bit, we need to calculate b^(2^place) and multiply
 		// it to the product
 		if (shift & 0x1) {
-			uint64_t factor = base;
+			int32_t factor = base;
 			// square base iteratively to get the factor
-			for (uint8_t i = 0; i < place; ++i)
-				factor = (factor*factor) % modulus;
+			for (uint8_t i = 0; i < place; ++i) {
+				factor = mul_mod(factor, factor, modulus);
+			}
 			// multiply the place to the result
-			result = (result*factor) % modulus;
+			result = mul_mod(result, factor, modulus);
 		}
 	}
+		Serial.println(tp);
 	return result;
 }
 
@@ -150,18 +217,22 @@ int mod(int a, int b) {
 //
 ///////////////////////////////////////////////////////////////////////////////
 
-uint32_t to_uint32( uint8_t b1, uint8_t b2, uint8_t b3, uint8_t b4 ) {
-	return ((((uint32_t) b1) << 24) | 
-			(((uint32_t) b2) << 16) |
-			(((uint32_t) b3) <<  8) |
-			 ((uint32_t) b4)      );
+uint32_t to_uint32( uint8_t b[4] ) {
+	return ( (((uint32_t) b[1]) << 24) | 
+			 (((uint32_t) b[2]) << 16) |
+			 (((uint32_t) b[3]) <<  8) |
+			 (((uint32_t) b[4])      ) );
 }
 
 
 
 ///////////////////////////////////////////////////////////////////////////////
 //
-// Struct for keeping track of all message keys and handlers
+//  Struct for keeping track of all packet tags and associated packet body 
+// lengths and handlers.
+//  Ideally the Communications class should have a registry for as many message
+// types as we want, which are registered in the setup function, but that
+// would be another 50 odd lines of overkill for this assignment.
 //
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -177,9 +248,9 @@ struct KeyAndHandler {
 };
 
 KeyAndHandler MessageHandlers[] = {
-	{ "KEY", 12, &KeyHandler },
-	{ "MSG", 32, &MsgHandler },
-	{ "RSP",  4, &RspHandler },
+	{ "KEY", 12, &key_handler },
+	{ "MSG", 32, &msg_handler },
+	{ "RSP",  4, &rsp_handler },
 };
 
 
@@ -196,23 +267,28 @@ class RingBuffer {
 			Buffer = (uint8_t*) malloc(BufferLen * sizeof(uint8_t));
 			if ( Buffer == 0 ) Serial.println("Memory exception allocating ring buffer!");
 		};
+		~RingBuffer() {
+			//free the buffer
+			free(Buffer);
+		}
 
 		// The length of the buffer
 		const uint8_t BufferLen;
 
 		// @debug check if the uint8_t conflicts with pointers
-		uint8_t *peek( int8_t offset = 0 ) {
-			return &(Buffer[mod(BufferPosition + offset, BufferLen)]);
+		uint8_t peek( int8_t offset = 0 ) {
+			int8_t index = mod(BufferPosition + offset, BufferLen);
+			return Buffer[index];
 		}
 
 		// Adds a value to the next position in the ring buffer
 		void push( uint8_t val ) {
-			BufferPosition++;
-			Buffer[mod(BufferPosition, BufferLen)] = val;
+			BufferPosition = mod(BufferPosition+1, BufferLen);
+			Buffer[BufferPosition] = val;
 		}
 
 	private: 
-		int8_t BufferPosition;
+		int16_t BufferPosition;
 
 		// Buffer contains the RingBuffer's data
 		uint8_t *Buffer;
@@ -220,7 +296,7 @@ class RingBuffer {
 
 
 
-////////	///////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
 //
 // Main state tracking for the encrypted communications
 //
@@ -265,12 +341,14 @@ public:
 
 	// Encrypts the character with my random generator
 	uint8_t encrypt( uint8_t ch ) {
-		return ch ^ MyRandomGen.next_uint32();
+		uint8_t mask = MyRandomGen.next_uint32();
+		return ch ^ mask;
 	}
 
 	// Encrypts the character with the others' random generator
 	uint8_t decrypt( uint8_t ch ) {
-		return ch ^ OtherRandomGen.next_uint32();
+		uint8_t mask = OtherRandomGen.next_uint32();
+		return ch ^ mask;
 	}
 
 	//sets us up for communications with the current private key that is set.
@@ -289,7 +367,7 @@ public:
 
 	// Initiate a new secure session for this any any connected client.
 	void set_session_key() {
-		Serial.println("=========================\n|| Start Session");
+		Serial.println("===========================\n|| Start Session");
 		// get a seed as analog noise
 		uint16_t noise = analog_noise();
 
@@ -306,7 +384,7 @@ public:
 		Serial.println(MyPublicKey, HEX);
 		Serial.print("|| My private key: ");
 		Serial.println(MyKey, HEX);
-		Serial.println("=========================");
+		Serial.println("===========================");
 	}
 };
 EncryptState Encrypt;
@@ -327,186 +405,219 @@ enum SerialState {
 };
 // Encryption handshakes need a timeout
 class Communication {
-	public:
-		Communication(): CurrentReadState(SerialReady), ReceivedDataLen(0) { CurrentKey[3] = '\0'; };
+public:
+	Communication(): CurrentReadState(SerialReady), ReceivedDataLen(0) { CurrentKey[3] = '\0'; };
 
-		// Manage the current state of serial send/receive
-		SerialState CurrentReadState;
+	// Manage the current state of serial send/receive
+	SerialState CurrentReadState;
 
-		// Key buffer contains the key that indicates the type of message that is being received
-		//char KeyBuffer[3];
+	// Key buffer contains the key that indicates the type of message that is being received
+	//char KeyBuffer[3];
 
-		// The maximum transmission size is 32 8 bit ints
-		//uint8_t DataBuffer[35];
-		RingBuffer DataBuffer;
+	// The maximum transmission size is 32 8 bit ints
+	//uint8_t DataBuffer[35];
+	RingBuffer DataBuffer;
 
-		///////////////////////////////////////////////////////////////////////////////
-		//
-		// Data serialization code, to send keys and messages
-		// Note, we send the generator and prime modulus too even though they are not
-		// dynamically chosen currently.
-		//
-		///////////////////////////////////////////////////////////////////////////////
+	///////////////////////////////////////////////////////////////////////////////
+	//
+	// Data serialization code, to send keys and messages
+	// Note, we send the generator and prime modulus too even though they are not
+	// dynamically chosen currently.
+	//
+	///////////////////////////////////////////////////////////////////////////////
 
-		void send_key() {
-			// set us to waiting for key response
-			Encrypt.Status = SentKey;
+	void send_key() {
+		// set us to waiting for key response
+		Encrypt.Status = SentKey;
 
-			Serial1.print("KEY");
-			// send prime modulus
-			send_32bit(Encrypt.PrimeMod);
+		Serial1.print("KEY");
+		// send prime modulus
+		send_32bit(Encrypt.PrimeMod);
 
-			// send generator
-			send_32bit(Encrypt.Generator);
+		// send generator
+		send_32bit(Encrypt.Generator);
 
-			// send public key
-			send_32bit(Encrypt.MyPublicKey);
+		// send public key
+		send_32bit(Encrypt.MyPublicKey);
 
-			// The termination character
-			Serial1.print('\0');
+		// The termination character
+		Serial1.print('\0');
+	}
+
+	void send_key_response() {
+		Serial1.print("RSP");
+
+		// Output my public key
+		send_32bit(Encrypt.MyPublicKey);
+
+		Serial1.print('\0');
+	}
+
+	void send_block(char block[32]) {
+		Serial1.print("MSG");
+		for (int8_t i = 0; i < 32; ++i)
+			Serial1.write(block[i]);
+		Serial1.print('\0');
+	}
+
+	void send_message(char *buffer, uint16_t len) {
+		//send in 32byte blocks
+		char block[32];
+		uint8_t pblock = 0, pbuffer = 0;
+
+		//send 32 byte blocks
+		while (pbuffer < len) {
+			block[pblock] = buffer[pbuffer];
+			++pbuffer;
+			++pblock;
+			if (pblock == 32) {
+				//we have 32 bytes, send and wrap around
+				send_block(block);
+				pblock = 0;
+			}
+
+			//delay between blocks, so that we don't overwhealm the serial system.
+			delay(100);
 		}
 
-		void send_key_response() {
-			Serial1.print("RSP");
-
-			// Output my public key
-			send_32bit(Encrypt.MyPublicKey);
-
-			Serial1.print('\0');
+		//send off the last block, padding with 0's
+		if (pblock > 0) {
+			//we have stuff to pad out and send
+			for (; pblock < 32; ++pblock)
+				block[pblock] = 0;
+			send_block(block);
 		}
+	}
 
-		void send_character(char c) {
-			Serial1.print("MSG");
-			Serial1.write(c);
-			Serial1.print('\0');
-		}
+	///////////////////////////////////////////////////////////////////////////////
+	//
+	// Data deserialization code
+	// Contains a main function |process_incomming_messages| that incrementally
+	// gathers serial input, deserializes it, and dispatches it to the rec_* 
+	// functions, which corrospond to the send_* seriazilation functions.
+	// The rec_* functions then take actual actions on the program state.
+	//
+	///////////////////////////////////////////////////////////////////////////////
 
-		void send_message(char *buffer) {
-			Serial1.print("MSG");
-			// @TODO: INSERT WORKING CODE HERE!
-			Serial1.print('\0');
-		}
+	void rec_key() {
+		Serial.println("===========================");
+		Serial.print("|| Other's Key: ");
+		Serial.println(Encrypt.OtherPublicKey, HEX);
+		Serial.println("===========================");
+		// generate and send our own response secret key
+		// generate
+		int32_t val = analog_noise();
+		int32_t seed = val | (((uint32_t)val)<<16);
+		Encrypt.MyRandomGen.seed(seed);
+		Encrypt.MyKey = Encrypt.MyRandomGen.next_uint32();
 
-		///////////////////////////////////////////////////////////////////////////////
-		//
-		// Data deserialization code
-		// Contains a main function |process_incomming_messages| that incrementally
-		// gathers serial input, deserializes it, and dispatches it to the rec_* 
-		// functions, which corrospond to the send_* seriazilation functions.
-		// The rec_* functions then take actual actions on the program state.
-		//
-		///////////////////////////////////////////////////////////////////////////////
+		// calculate my public key, and the shared secret, since
+		// we do have the other's info to work with at this point.
+		Encrypt.MyPublicKey = pow_mod(Encrypt.Generator, Encrypt.MyKey, Encrypt.PrimeMod);
+		Encrypt.SecretKey = pow_mod(Encrypt.OtherPublicKey, Encrypt.MyKey, Encrypt.PrimeMod);
 
-		void rec_key() {
-			Serial.println("===========================");
-			Serial.print("|| Other's Key: ");
-			Serial.println(Encrypt.OtherPublicKey, HEX);
-			Serial.println("===========================");
-			// generate and send our own response secret key
-			// generate
-			int32_t val = analog_noise();
-			int32_t seed = val | (((uint32_t)val)<<16);
-			Encrypt.MyRandomGen.seed(seed);
-			Encrypt.MyKey = Encrypt.MyRandomGen.next_uint32();
+		// send. This will send my public key
+		send_key_response();
 
-			// calculate my public key, and the shared secret, since
-			// we do have the other's info to work with at this point.
-			Encrypt.MyPublicKey = pow_mod(Encrypt.Generator, Encrypt.MyKey, Encrypt.PrimeMod);
-			Encrypt.SecretKey = pow_mod(Encrypt.OtherPublicKey, Encrypt.MyKey, Encrypt.PrimeMod);
+		// and we already have the secret key, so start the session
+		Encrypt.start_session();
+	}
 
-			// send. This will send my public key
-			send_key_response();
+	void rec_key_response() {
+		// find out the shared secret key
+		Encrypt.SecretKey = pow_mod(Encrypt.OtherPublicKey, Encrypt.MyKey, Encrypt.PrimeMod);
 
-			// and we already have the secret key, so start the session
-			Encrypt.start_session();
-		}
+		// and start the session
+		Encrypt.start_session();
+	}
 
-		void rec_key_response() {
-			// find out the shared secret key
-			Encrypt.SecretKey = pow_mod(Encrypt.OtherPublicKey, Encrypt.MyKey, Encrypt.PrimeMod);
+	// Reads data from the serial port and places it into the key buffer and data buffer
+	void process_incomming_messages() {
+		// Check if there is data in the serial buffer
+		while (Serial1.available()) {
+			// Add the new data from the serial monitor to the ring buffer
+			DataBuffer.push(Serial1.read());
+			if (CurrentReadState == ReceivingKey || CurrentReadState == SerialReady) {
+				// If we are receiving a key, the first 3 receieved characters form the key
+				CurrentReadState = ReceivingKey;
 
-			// and start the session
-			Encrypt.start_session();
-		}
+				CurrentKey[0] = DataBuffer.peek( -2 );
+				CurrentKey[1] = DataBuffer.peek( -1 );
+				CurrentKey[2] = DataBuffer.peek(  0 );
 
-		// Reads data from the serial port and places it into the key buffer and data buffer
-		void process_incomming_messages() {
-			// Check if there is data in the serial buffer
-			while (Serial1.available()) {
-				// Add the new data from the serial monitor to the ring buffer
-				DataBuffer.push(Serial1.read());
-				if ( CurrentReadState == ReceivingKey || CurrentReadState == SerialReady ) {
-					// If we are receiving a key, the first 3 receieved characters form the key
-					CurrentReadState = ReceivingKey;
-
-					CurrentKey[0] = *(DataBuffer.peek( -2 ));
-					CurrentKey[1] = *(DataBuffer.peek( -1 ));
-					CurrentKey[2] = *(DataBuffer.peek(  0 ));
-
-					// If these characters form a valid key, we can move on to processing the message.
-					// sizeof messagehandlers may not work
-					for ( uint8_t i = 0; i < (sizeof(MessageHandlers)/sizeof(KeyAndHandler)); i++ ) {
-						if ( !strcmp(MessageHandlers[i].Key, CurrentKey) ) {
-							Serial.print("Key Matched:");
-							Serial.println(CurrentKey);
-							// This is the last char in a key,
-							// If this message is not KEY and we haven't setup encryption, 
-							// we need to tell the other to reinit
-							if ( Encrypt.Status != Ready && strcmp(CurrentKey, "KEY") ) {
-								// We are receiving something other than a KEY, but encryption has not been initialized
-								Serial.print("Resetting encryption");
-								Encrypt.set_session_key();
-								send_key();
-								CurrentReadState = SerialReady;
-								return;
-							}
-
-							// Mark that we have the key
-							CurrentReadState = ReceivingMessage;
-							CurrentMessageHandler = MessageHandlers[i];
-
-							// Reset received data length
-							ReceivedDataLen = 0;
+				// If these characters form a valid key, we can move on to processing the message.
+				// sizeof messagehandlers may not work
+				for ( uint8_t i = 0; i < (sizeof(MessageHandlers)/sizeof(KeyAndHandler)); i++ ) {
+					if ( !strcmp(MessageHandlers[i].Key, CurrentKey) ) {
+						// This is the last char in a key,
+						// If this message is not KEY and we haven't setup encryption, 
+						// we need to tell the other to reinit
+						if ( Encrypt.Status != Ready && strcmp(CurrentKey, "KEY") ) {
+							// We are receiving something other than a KEY, but encryption has not been initialized
+							Serial.print("Resetting encryption");
+							Encrypt.set_session_key();
+							send_key();
+							CurrentReadState = SerialReady;
 							return;
 						}
+
+						// Mark that we have the key
+						CurrentReadState = ReceivingMessage;
+						CurrentMessageHandler = MessageHandlers[i];
+
+						// Reset received data length
+						ReceivedDataLen = 0;
+						return;
 					}
-				} else if ( CurrentReadState == ReceivingMessage ) {
-					// A message (general data) is being received
-					ReceivedDataLen++;
+				}
+			} else if (CurrentReadState == ReceivingMessage) {
+				// A message (general data) is being received
+				// this also keeps track of how far back in the ring-buffer the start of the body
+				// we're currently waiting for is.
+				ReceivedDataLen++;
 
-					// Check if the message should be done, apply sanity check and call the handler
-					if ( ReceivedDataLen > CurrentMessageHandler.DataLen && *(DataBuffer.peek()) == '\0' ) {
-						// Technically sane!
-						uint8_t *data = (uint8_t*) malloc(CurrentMessageHandler.DataLen * sizeof(uint8_t));
-						if ( data == 0 ) Serial.println("Error allocating data array");
+				// Check if the message should be done, apply sanity check and call the handler
+				if ( ReceivedDataLen > CurrentMessageHandler.DataLen && DataBuffer.peek() == '\0' ) {
+					//note, we have to allocate memery here because the message may not be in contiguous
+					//memory in the actual ring buffer, but the message handler needs a contiguous
+					//string.
+					uint8_t *data = (uint8_t*) malloc(CurrentMessageHandler.DataLen * sizeof(uint8_t));
+					if ( data == 0 ) Serial.println("Error allocating data array");
 
-						for ( uint8_t i = 0; i <= CurrentMessageHandler.DataLen; i++ )
-							data[i] = *DataBuffer.peek( i - CurrentMessageHandler.DataLen );
+					for ( uint8_t i = 0; i < CurrentMessageHandler.DataLen; i++ )
+						data[i] = DataBuffer.peek( i - CurrentMessageHandler.DataLen );
 
-						CurrentMessageHandler.Handler( data );
-						CurrentReadState = SerialReady;
-					} else if ( ReceivedDataLen > CurrentMessageHandler.DataLen ) {
-						// The data we received is bad because it is not terminated properly -- drop the message
-						Serial.println("Dumping buffer data");
-						CurrentReadState = SerialReady;
+					CurrentMessageHandler.Handler( data );
+					CurrentReadState = SerialReady;
 
-					}
-				} else {
+					//free the tmp buffer
+					free(data);
+
+				} else if ( ReceivedDataLen > CurrentMessageHandler.DataLen ) {
+					// The data we received is bad because it is not terminated properly
+					// Drop the message and let the user know
+					Serial.println("Bad Message body");
+
+					//put us into a state where we're ready for new messages
 					CurrentReadState = SerialReady;
 				}
+			} else {
+				CurrentReadState = SerialReady;
 			}
 		}
-	private: 
-		char CurrentKey[4];
-		uint8_t ReceivedDataLen;
-		KeyAndHandler CurrentMessageHandler;
+	}
 
-		void send_32bit(uint32_t num) {
-			Serial1.write((num>>24) & 0xFF);
-			Serial1.write((num>>16) & 0xFF);
-			Serial1.write((num>>8 ) & 0xFF);
-			Serial1.write((num    ) & 0xFF);
-		}
+private: 
+	char CurrentKey[4];
+	uint8_t ReceivedDataLen;
+	KeyAndHandler CurrentMessageHandler;
+
+	void send_32bit(uint32_t num) {
+		Serial1.write((num>>24) & 0xFF);
+		Serial1.write((num>>16) & 0xFF);
+		Serial1.write((num>>8 ) & 0xFF);
+		Serial1.write((num    ) & 0xFF);
+	}
 };
 Communication Comms;
 
@@ -520,11 +631,11 @@ Communication Comms;
 ///////////////////////////////////////////////////////////////////////////////
 
 // Sets up the EncryptStatus class with all the numbers we need
-void KeyHandler( uint8_t data[12] ) {
+void key_handler( uint8_t data[12] ) {
 	// Give Encrypt the base data that it needs
-	Encrypt.PrimeMod = to_uint32(data[0], data[1], data[2], data[3]);
-	Encrypt.Generator = to_uint32(data[4], data[5], data[6], data[7]);
-	Encrypt.OtherPublicKey = to_uint32(data[8], data[9], data[10], data[11]);
+	Encrypt.PrimeMod = to_uint32(&data[0]);
+	Encrypt.Generator = to_uint32(&data[4]);
+	Encrypt.OtherPublicKey = to_uint32(&data[8]);
 	Encrypt.Status = SentKey;
 
 	// Let Encrypt handle the rest of the key setup
@@ -532,20 +643,23 @@ void KeyHandler( uint8_t data[12] ) {
 }
 
 // Decrypts all characters and prints them in the users' serial monitor
-void MsgHandler( uint8_t data[32] ) {
+void msg_handler( uint8_t data[32] ) {
+	//we got input data, give it to the user
 	for ( uint8_t i = 0; i < 32; i++ ) {
-		// Null character symbolizes end of useful data
-		if ( data[i] == '\0' )
+		char ch = Encrypt.decrypt(data[i]);
+		if (ch) {
+			Serial.write(ch);
+		} else {
+			//done with usefull message characters
 			break;
-
-		Serial.write(Encrypt.decrypt(data[i]));
+		}
 	}
 }
 
 // RSP message is receieved after we send a KEY message. It will contain the other
 // devices' public key
-void RspHandler( uint8_t data[4] ) {
-	Encrypt.OtherPublicKey = to_uint32(data[0], data[1], data[2], data[3]);
+void rsp_handler( uint8_t data[4] ) {
+	Encrypt.OtherPublicKey = to_uint32(&data[0]);
 
 	// find out the shared secret key
 	Encrypt.SecretKey = pow_mod(Encrypt.OtherPublicKey, Encrypt.MyKey, Encrypt.PrimeMod);
@@ -558,19 +672,81 @@ void RspHandler( uint8_t data[4] ) {
 
 ///////////////////////////////////////////////////////////////////////////////
 //
-// The main output functions that the program setup calls on. These functions
-// build the data for the send_* functions to serialize.
+// The main output functions that the program calls on to send a message.
+// This function will encrypt the passed buffer using the encryt-state, and
+// then send off the message using the communciations-state
 //
 ///////////////////////////////////////////////////////////////////////////////
 
-// Encrypt and send a character
-void output_character(uint8_t ch) {
-	// encrypt the character with my random generator
-	ch ^= (Encrypt.MyRandomGen.next_uint32() & 0xFF);
+void output_message(char* msg, uint16_t len) {
+	//encrypt the buffer
+	for (uint16_t i = 0; i < len; ++i) {
+		//note, msg is non-const, we are allowed to mess with the
+		//buffer if we want to.
+		msg[i] = Encrypt.encrypt(msg[i]);
+	}
 
-	// send the character
-	Comms.send_character(ch);
+	//send off the message
+	Comms.send_message(msg, len);
 }
+
+
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// StringBuilder for buffering whole lines of user input to send.
+//
+///////////////////////////////////////////////////////////////////////////////
+
+class StringBuilder {
+public:
+	StringBuilder(): mBuffer(0), mLen(0), mBufferLen(0) {}
+	~StringBuilder() {
+		free(mBuffer);
+	}
+
+	void reserve(uint16_t sz) {
+		if (sz > mBufferLen) {
+			char* newBuffer = (char*)malloc(sz);
+			if (mBuffer) {
+				// if we have a buffer, transfer the old contents from it and
+				// free it.
+				memcpy(newBuffer, mBuffer, mLen);
+				free(mBuffer);
+			}
+			mBuffer = newBuffer;
+			mBufferLen = sz;
+		}
+	}
+
+	void append(char c) {
+		reserve(mLen + 1);
+		mBuffer[mLen] = c;
+		mLen++;
+	}
+
+	void append(char* dat, uint16_t len) {
+		reserve(mLen + len);
+		memcpy(&mBuffer[mLen], dat, len);
+		mLen += len;
+	}
+
+	void clear() {
+		mLen = 0;
+	}
+
+	char* buffer() const {return mBuffer; }
+
+	uint16_t length() const {return mLen; }
+
+
+private:
+	char* mBuffer;
+	uint16_t mLen;
+	uint16_t mBufferLen;
+};
+
 
 
 
@@ -579,6 +755,8 @@ void output_character(uint8_t ch) {
 // The main setup and loop
 //
 ///////////////////////////////////////////////////////////////////////////////
+
+StringBuilder UserInputBuffer;
 
 void setup() {
 	// open the serial communications that I need
@@ -599,8 +777,21 @@ void loop() {
 			Comms.send_key();
 
 		} else if (Encrypt.Status == Ready) {
-			// we're ready, send the input
-			output_character(Serial.read());
+			// we're ready, read the input
+			char ch = Serial.read();
+			//buffer the character
+			UserInputBuffer.append(ch);
+
+			//if it's a newline, send off the whole line
+			//and clear out the UserInputBuffer
+			if (ch == '\n') {
+				//send
+				//add a null terminator, since the messages need it
+				UserInputBuffer.append('\0');
+				output_message(UserInputBuffer.buffer(), UserInputBuffer.length());
+				//clear
+				UserInputBuffer.clear();
+			}
 
 		} else if (Encrypt.Status == Failed) {
 			// we failed, let the user know
